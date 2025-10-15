@@ -1,3 +1,6 @@
+#ifndef ESPNOW_FUNCTIONS_H
+#define ESPNOW_FUNCTIONS_H
+
 #include "Config.h"
 #include "Mechanum_Drive.h"
 
@@ -13,7 +16,47 @@ typedef struct struct_message {
 //    char address[18];
 } struct_message;
 
-struct_message incomingData; 
+struct_message incomingData;
+
+struct PID {
+    float Kp, Ki, Kd;
+    float prevError;
+    float integral;
+    float prevOutput;
+    PID(float kp, float ki, float kd) : Kp(kp), Ki(ki), Kd(kd), prevError(0), integral(0), prevOutput(0) {}
+};
+
+// Low-pass filter struct using Exponential Moving Average (EMA)
+struct AxisFilter {
+    float prevFiltered = 0;
+    float alpha = 0.1;  // Smoothing factor (0-1), adjustable for responsiveness
+};
+
+// PID parameters (adjustable for tuning)
+const float KP_X = 0.5, KI_X = 0.01, KD_X = 0.1;  // For X-axis (left-right)
+const float KP_Y = 0.5, KI_Y = 0.01, KD_Y = 0.1;  // For Y-axis (forward-backward)
+const float KP_RX = 0.5, KI_RX = 0.01, KD_RX = 0.1;  // For RX-axis (rotation)
+const int DEADZONE = 5;  // Dead zone threshold to prevent vibrations at neutral
+
+// Function to apply low-pass filter (EMA) to axis input
+float applyFilter(int input, AxisFilter &filter) {
+    filter.prevFiltered = filter.alpha * input + (1 - filter.alpha) * filter.prevFiltered;
+    return filter.prevFiltered;
+}
+
+// Function to apply PID control for smoothing
+int applyPIDControl(float setpoint, PID &pid) {
+    float error = setpoint - pid.prevOutput;
+    pid.integral += error;
+    // Limit integral to prevent windup
+    if (pid.integral > 100) pid.integral = 100;
+    if (pid.integral < -100) pid.integral = -100;
+    float derivative = error - pid.prevError;
+    float output = pid.Kp * error + pid.Ki * pid.integral + pid.Kd * derivative;
+    pid.prevError = error;
+    pid.prevOutput = output;
+    return (int)output;
+}
 
 void OnDataRecv(const uint8_t *mac, const uint8_t *incomingLocal, int len) {
     memcpy(&incomingData, incomingLocal, sizeof(incomingData));
@@ -29,24 +72,49 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingLocal, int len) {
         brakeAll(motor1, motor2, motor3, motor4);
     }
     else {
+        // persistent filter and PID instances for each axis
+        static AxisFilter filterX, filterY, filterRX;
+        static PID pidX = {KP_X, KI_X, KD_X};
+        static PID pidY = {KP_Y, KI_Y, KD_Y};
+        static PID pidRX = {KP_RX, KI_RX, KD_RX};
+
+        // Extract raw joystick data
         int x = incomingData.joyData[0];  // X-axis (Left-Right movement)
         int y = incomingData.joyData[1];  // Y-axis (Forward-Backward movement)
         int rx = incomingData.joyData[2]; // X-axis (Rotation)
         int ry = incomingData.joyData[3]; // Y-axis (Unused in this case)
 
-        int frontLeft  = y + x + rx;  
-        int backLeft   = y - x + rx;  
-        int frontRight = y - x - rx; 
-        int backRight  = y + x - rx;  
+        // Apply low-pass filter (EMA)
+        float filteredX = applyFilter(x, filterX);
+        float filteredY = applyFilter(y, filterY);
+        float filteredRX = applyFilter(rx, filterRX);
 
+        // Apply dead zone
+        if (abs(filteredX) < DEADZONE) filteredX = 0;
+        if (abs(filteredY) < DEADZONE) filteredY = 0;
+        if (abs(filteredRX) < DEADZONE) filteredRX = 0;
+
+        // Aplly PID untuk menghaluskan respons
+        int smoothedX = applyPIDControl(filteredX, pidX);
+        int smoothedY = applyPIDControl(filteredY, pidY);
+        int smoothedRX = applyPIDControl(filteredRX, pidRX);
+
+        // Kalkulasi kecepatan motor berdasarkan input joystick yang telah dihaluskan
+        int frontLeft  = smoothedY + smoothedX + smoothedRX;
+        int backLeft   = smoothedY - smoothedX + smoothedRX;
+        int frontRight = smoothedY - smoothedX - smoothedRX;
+        int backRight  = smoothedY + smoothedX - smoothedRX;
+
+        // Normalize motor speeds to stay within -150 to +150 range
         int maxVal = max(max(abs(frontLeft), abs(backLeft)), max(abs(frontRight), abs(backRight)));
-        if (maxVal > 150) {
-            frontLeft  = (frontLeft  * 150) / maxVal;
-            backLeft   = (backLeft   * 150) / maxVal;
-            frontRight = (frontRight * 150) / maxVal;
-            backRight  = (backRight  * 150) / maxVal;
+        if (maxVal > 100) {
+            frontLeft  = (frontLeft  * 100) / maxVal;
+            backLeft   = (backLeft   * 100) / maxVal;
+            frontRight = (frontRight * 100) / maxVal;
+            backRight  = (backRight  * 100) / maxVal;
         }
 
+        // Drive motors with calculated speeds
         motor1.drive(-frontLeft);
         motor2.drive(frontRight);
         motor3.drive(backLeft);
@@ -84,7 +152,7 @@ void failSafeCheck(struct_message &recvData) {
     }
     if (dataChanged) {
         lastReceiveTime = millis();
-        lastReceivedData = recvData; 
+        lastReceivedData = recvData;
         failsafeTriggered = false;
     }
     if (!failsafeTriggered && (millis() - lastReceiveTime >= 1000)) {
@@ -106,7 +174,7 @@ void failSafeCheck(struct_message &recvData) {
             for (int i = 0; i < 4; i++) recvData.joyData[i] = 0;
             for (int i = 0; i < 15; i++) recvData.stat[i] = true;
             String dataLine;
-            
+
             for (int i = 0; i < 4; i++)  dataLine += String(recvData.joyData[i]) + ",";
             for (int i = 0; i < 15; i++) dataLine += String(recvData.stat[i]) + ",";
             dataLine += String(recvData.remoteIndex);
@@ -118,3 +186,5 @@ void failSafeCheck(struct_message &recvData) {
         }
     }
 }
+
+#endif // ESPNOW_FUNCTIONS_H
