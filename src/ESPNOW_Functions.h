@@ -3,6 +3,7 @@
 
 #include "Config.h"
 #include "Mechanum_Drive.h"
+#include "GripperControl.h"
 
 Motor motor1(M1_AIN1, M1_AIN2, M1_PWMA, 1);  // Motor 1 (A)
 Motor motor2(M2_BIN1, M2_BIN2, M2_PWMB, 1);  // Motor 2 (B)
@@ -13,7 +14,6 @@ typedef struct struct_message {
     bool stat[15];
     int joyData[4];
     uint8_t remoteIndex = 1;
-//    char address[18];
 } struct_message;
 
 struct_message incomingData;
@@ -29,13 +29,13 @@ struct PID {
 // Low-pass filter struct using Exponential Moving Average (EMA)
 struct AxisFilter {
     float prevFiltered = 0;
-    float alpha = 0.1;  // Smoothing factor (0-1), adjustable for responsiveness
+    float alpha = 0.7;  // Smoothing factor (0-1), adjustable for responsiveness
 };
 
 // PID parameters (adjustable for tuning)
-const float KP_X = 0.5, KI_X = 0.01, KD_X = 0.1;  // For X-axis (left-right)
-const float KP_Y = 0.5, KI_Y = 0.01, KD_Y = 0.1;  // For Y-axis (forward-backward)
-const float KP_RX = 0.5, KI_RX = 0.01, KD_RX = 0.1;  // For RX-axis (rotation)
+const float KP_X = 0.4, KI_X = 0.01, KD_X = 0.1;  // For X-axis (left-right)
+const float KP_Y = 0.4, KI_Y = 0.01, KD_Y = 0.1;  // For Y-axis (forward-backward)
+const float KP_RX = 0.4, KI_RX = 0.01, KD_RX = 0.1;  // For RX-axis (rotation)
 const int DEADZONE = 5;  // Dead zone threshold to prevent vibrations at neutral
 
 // Function to apply low-pass filter (EMA) to axis input
@@ -58,16 +58,7 @@ int applyPIDControl(float setpoint, PID &pid) {
     return (int)output;
 }
 
-void OnDataRecv(const uint8_t *mac, const uint8_t *incomingLocal, int len) {
-    memcpy(&incomingData, incomingLocal, sizeof(incomingData));
-    String dataLine = String();
-    for (int i = 0; i < 4; i++) {  dataLine += String(incomingData.joyData[i]) + ","; }
-    for (int i = 0; i < 15; i++) { dataLine += String(incomingData.stat[i]) + ",";    }
-    
-    dataLine += String(incomingData.remoteIndex);
-
-    DEBUG_PRINTLN("Serial Sent Data: " + dataLine);
-
+void DriveRobot(){
     if (incomingData.joyData[0] == 0 && incomingData.joyData[1] == 0 && incomingData.joyData[2] == 0 && incomingData.joyData[3] == 0){
         brakeAll(motor1, motor2, motor3, motor4);
     }
@@ -78,7 +69,7 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingLocal, int len) {
         static PID pidY = {KP_Y, KI_Y, KD_Y};
         static PID pidRX = {KP_RX, KI_RX, KD_RX};
 
-        // Extract raw joystick data
+             // Extract raw joystick data
         int x = incomingData.joyData[0];  // X-axis (Left-Right movement)
         int y = incomingData.joyData[1];  // Y-axis (Forward-Backward movement)
         int rx = incomingData.joyData[2]; // X-axis (Rotation)
@@ -115,11 +106,83 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingLocal, int len) {
         }
 
         // Drive motors with calculated speeds
-        motor1.drive(-frontLeft);
+        motor1.drive(-frontLeft * 0.5);
         motor2.drive(frontRight);
         motor3.drive(backLeft);
         motor4.drive(-backRight);
     }
+}
+
+void GripperControl() {
+    // Lifter control
+    if (incomingData.stat[9] == 0 && (currentTime - lastDebounceTimeA) > debounceDelay) { // Tombol A (Lifter down)
+        lastDebounceTimeA = currentTime;
+        if (lifterState != LIFTER_DOWN) {
+        actuationStartTime = currentTime;
+        lifterState = LIFTER_MOVING;
+        int currentPos = servo2.read();
+        moveServoSmooth(servo2, currentPos, 0);
+        lifterState = LIFTER_DOWN;
+        }
+    }
+
+    if (incomingData.stat[11] == 0 && (currentTime - lastDebounceTimeB) > debounceDelay) { // Tombol B (Lifter up)
+        lastDebounceTimeB = currentTime;
+        if (lifterState != LIFTER_UP) {
+        actuationStartTime = currentTime;
+        lifterState = LIFTER_MOVING;
+        int currentPos = servo2.read();
+        moveServoSmooth(servo2, currentPos, 150);
+        lifterState = LIFTER_UP;
+        }
+    }
+
+    // Gripper control
+    if (incomingData.stat[14] == 0 && (currentTime - lastDebounceTimeX) > debounceDelay) { // Tombol X (Gripper open)
+        lastDebounceTimeX = currentTime;
+        if (gripperState != GRIPPER_OPEN) {
+            actuationStartTime = currentTime;
+            gripperState = GRIPPER_MOVING;
+            int currentPos = servo1.read();
+            moveServoSmooth(servo1, currentPos, 0);  // Membuka gripper
+            gripperState = GRIPPER_OPEN;
+        }
+    }
+
+    if (incomingData.stat[3] == 0 && (currentTime - lastDebounceTimeY) > debounceDelay) { // Tombol Y (Gripper close)
+        lastDebounceTimeY = currentTime;
+        if (gripperState != GRIPPER_CLOSE) {
+            actuationStartTime = currentTime;
+            gripperState = GRIPPER_MOVING;
+            int currentPos = servo1.read();
+            moveServoSmooth(servo1, currentPos, 180); // Menutup gripper
+            gripperState = GRIPPER_CLOSE;
+        }
+    }
+
+    // Timed actuation check (stop if max time exceeded, though soft-move handles timing)
+    if (lifterState == LIFTER_MOVING && (currentTime - actuationStartTime) > maxActuationTime) {
+        servo2.write(servo2.read());
+        lifterState = (servo2.read() < 75) ? LIFTER_DOWN : LIFTER_UP;
+    }
+    if (gripperState == GRIPPER_MOVING && (currentTime - actuationStartTime) > maxActuationTime) {
+        servo1.write(servo1.read());
+        gripperState = (servo1.read() < 90) ? GRIPPER_OPEN : GRIPPER_CLOSE;
+    }
+}
+
+void OnDataRecv(const uint8_t *mac, const uint8_t *incomingLocal, int len) {
+    memcpy(&incomingData, incomingLocal, sizeof(incomingData));
+    String dataLine = String();
+    for (int i = 0; i < 4; i++) {  dataLine += String(incomingData.joyData[i]) + ","; }
+    for (int i = 0; i < 15; i++) { dataLine += String(incomingData.stat[i]) + ",";    }
+    
+    dataLine += String(incomingData.remoteIndex);
+    DEBUG_PRINTLN("Serial Sent Data: " + dataLine);
+
+    DriveRobot();
+    GripperControl();
+    // failSafeCheck(incomingData);
 }
 
 void startComms() {

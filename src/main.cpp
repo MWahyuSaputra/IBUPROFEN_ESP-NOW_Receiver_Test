@@ -15,12 +15,11 @@
 #include "ESPNOW_Functions.h"
 
 void setup() {
-    DEBUG_BEGIN(115200);
-    WiFi.mode(WIFI_STA);
-    startComms();
+  DEBUG_BEGIN(115200);
+  WiFi.mode(WIFI_STA);
 }
 
-void loop() 
-{
-    // failSafeCheck(incomingData);
+void loop()
+{  
+  startComms();
 }
