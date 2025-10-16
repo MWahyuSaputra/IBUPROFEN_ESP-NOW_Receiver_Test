@@ -17,6 +17,7 @@
 void setup() {
   DEBUG_BEGIN(115200);
   WiFi.mode(WIFI_STA);
+  setupGripperControl();
 }
 
 void loop()

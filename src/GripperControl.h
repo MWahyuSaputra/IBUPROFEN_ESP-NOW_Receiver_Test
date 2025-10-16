@@ -1,7 +1,5 @@
 #include <ESP32Servo.h>
 
-unsigned long currentTime = millis();
-
 Servo servo1;  // servo pertama (gripper)
 Servo servo2;  // servo kedua (lifter)
 
@@ -57,4 +55,4 @@ void moveServoSmooth(Servo &servo, int startPos, int endPos) {
         servo.write(currentPos);
         delay(stepDelay);
     }
-    }
+}

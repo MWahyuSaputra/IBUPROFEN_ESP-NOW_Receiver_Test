@@ -29,7 +29,7 @@ struct PID {
 // Low-pass filter struct using Exponential Moving Average (EMA)
 struct AxisFilter {
     float prevFiltered = 0;
-    float alpha = 0.7;  // Smoothing factor (0-1), adjustable for responsiveness
+    float alpha = 0.5;  // Smoothing factor (0-1), adjustable for responsiveness
 };
 
 // PID parameters (adjustable for tuning)
@@ -91,10 +91,15 @@ void DriveRobot(){
         int smoothedRX = applyPIDControl(filteredRX, pidRX);
 
         // Kalkulasi kecepatan motor berdasarkan input joystick yang telah dihaluskan
-        int frontLeft  = smoothedY + smoothedX + smoothedRX;
-        int backLeft   = smoothedY - smoothedX + smoothedRX;
-        int frontRight = smoothedY - smoothedX - smoothedRX;
-        int backRight  = smoothedY + smoothedX - smoothedRX;
+        int frontLeft  = smoothedY + smoothedX - smoothedRX;
+        int backLeft   = smoothedY - smoothedX - smoothedRX;
+        int frontRight = smoothedY - smoothedX + smoothedRX;
+        int backRight  = smoothedY + smoothedX + smoothedRX;
+
+        // int frontLeft  = smoothedY + smoothedX + smoothedRX;
+        // int backLeft   = smoothedY - smoothedX + smoothedRX;
+        // int frontRight = smoothedY - smoothedX - smoothedRX;
+        // int backRight  = smoothedY + smoothedX - smoothedRX;
 
         // Normalize motor speeds to stay within -150 to +150 range
         int maxVal = max(max(abs(frontLeft), abs(backLeft)), max(abs(frontRight), abs(backRight)));
@@ -106,7 +111,7 @@ void DriveRobot(){
         }
 
         // Drive motors with calculated speeds
-        motor1.drive(-frontLeft * 0.5);
+        motor1.drive(-frontLeft);
         motor2.drive(frontRight);
         motor3.drive(backLeft);
         motor4.drive(-backRight);
@@ -114,6 +119,8 @@ void DriveRobot(){
 }
 
 void GripperControl() {
+    unsigned long currentTime = millis();  // Update currentTime each call
+
     // Lifter control
     if (incomingData.stat[9] == 0 && (currentTime - lastDebounceTimeA) > debounceDelay) { // Tombol A (Lifter down)
         lastDebounceTimeA = currentTime;
@@ -138,7 +145,7 @@ void GripperControl() {
     }
 
     // Gripper control
-    if (incomingData.stat[14] == 0 && (currentTime - lastDebounceTimeX) > debounceDelay) { // Tombol X (Gripper open)
+    if (incomingData.stat[13] == 0 && (currentTime - lastDebounceTimeX) > debounceDelay) { // Tombol X (Gripper open)
         lastDebounceTimeX = currentTime;
         if (gripperState != GRIPPER_OPEN) {
             actuationStartTime = currentTime;
