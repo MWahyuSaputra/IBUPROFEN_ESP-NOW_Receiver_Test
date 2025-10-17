@@ -29,13 +29,14 @@ struct PID {
 // Low-pass filter struct using Exponential Moving Average (EMA)
 struct AxisFilter {
     float prevFiltered = 0;
-    float alpha = 0.5;  // Smoothing factor (0-1), adjustable for responsiveness
+    float alpha = 0.45;  // Smoothing factor (0-1), adjustable for responsiveness
+    // Note: alpha for RX will be overridden to 0.8 for smoother rotation
 };
 
 // PID parameters (adjustable for tuning)
 const float KP_X = 0.4, KI_X = 0.01, KD_X = 0.1;  // For X-axis (left-right)
 const float KP_Y = 0.4, KI_Y = 0.01, KD_Y = 0.1;  // For Y-axis (forward-backward)
-const float KP_RX = 0.4, KI_RX = 0.01, KD_RX = 0.1;  // For RX-axis (rotation)
+const float KP_RX = 0.1, KI_RX = 0.01, KD_RX = 0.1;  // For RX-axis (rotation) - reduced for smoother response
 const int DEADZONE = 5;  // Dead zone threshold to prevent vibrations at neutral
 
 // Function to apply low-pass filter (EMA) to axis input
@@ -49,8 +50,8 @@ int applyPIDControl(float setpoint, PID &pid) {
     float error = setpoint - pid.prevOutput;
     pid.integral += error;
     // Limit integral to prevent windup
-    if (pid.integral > 100) pid.integral = 100;
-    if (pid.integral < -100) pid.integral = -100;
+    if (pid.integral > 150) pid.integral = 150;
+    if (pid.integral < -150) pid.integral = -150;
     float derivative = error - pid.prevError;
     float output = pid.Kp * error + pid.Ki * pid.integral + pid.Kd * derivative;
     pid.prevError = error;
@@ -75,6 +76,9 @@ void DriveRobot(){
         int rx = incomingData.joyData[2]; // X-axis (Rotation)
         int ry = incomingData.joyData[3]; // Y-axis (Unused in this case)
 
+        // Set higher smoothing for rotation
+        filterRX.alpha = 0.8;
+
         // Apply low-pass filter (EMA)
         float filteredX = applyFilter(x, filterX);
         float filteredY = applyFilter(y, filterY);
@@ -91,23 +95,21 @@ void DriveRobot(){
         int smoothedRX = applyPIDControl(filteredRX, pidRX);
 
         // Kalkulasi kecepatan motor berdasarkan input joystick yang telah dihaluskan
-        int frontLeft  = smoothedY + smoothedX - smoothedRX;
-        int backLeft   = smoothedY - smoothedX - smoothedRX;
-        int frontRight = smoothedY - smoothedX + smoothedRX;
-        int backRight  = smoothedY + smoothedX + smoothedRX;
+        // Scale rotation contribution to limit speed
+        int scaledRX = smoothedRX * 0.15; // Scale down rotation effect to 60%
+        int frontLeft  = smoothedY + smoothedX - scaledRX;
+        int backLeft   = smoothedY - smoothedX - scaledRX;
+        int frontRight = smoothedY - smoothedX + scaledRX;
+        int backRight  = smoothedY + smoothedX + scaledRX;
 
-        // int frontLeft  = smoothedY + smoothedX + smoothedRX;
-        // int backLeft   = smoothedY - smoothedX + smoothedRX;
-        // int frontRight = smoothedY - smoothedX - smoothedRX;
-        // int backRight  = smoothedY + smoothedX - smoothedRX;
 
-        // Normalize motor speeds to stay within -150 to +150 range
+        // Normalize motor speeds
         int maxVal = max(max(abs(frontLeft), abs(backLeft)), max(abs(frontRight), abs(backRight)));
-        if (maxVal > 100) {
-            frontLeft  = (frontLeft  * 100) / maxVal;
-            backLeft   = (backLeft   * 100) / maxVal;
-            frontRight = (frontRight * 100) / maxVal;
-            backRight  = (backRight  * 100) / maxVal;
+        if (maxVal > 150) {
+            frontLeft  = (frontLeft  * 150) / maxVal;
+            backLeft   = (backLeft   * 150) / maxVal;
+            frontRight = (frontRight * 150) / maxVal;
+            backRight  = (backRight  * 150) / maxVal;
         }
 
         // Drive motors with calculated speeds
@@ -118,64 +120,67 @@ void DriveRobot(){
     }
 }
 
+void ShortCutSpeedControl() {
+    if(incomingData.stat[2] == 0){
+        moveForward(motor1, motor2, motor3, motor4, 200);
+        delay(700);
+        brakeAll(motor1, motor2, motor3, motor4);
+    }
+}
+
 void GripperControl() {
-    unsigned long currentTime = millis();  // Update currentTime each call
-
-    // Lifter control
-    if (incomingData.stat[9] == 0 && (currentTime - lastDebounceTimeA) > debounceDelay) { // Tombol A (Lifter down)
-        lastDebounceTimeA = currentTime;
-        if (lifterState != LIFTER_DOWN) {
+unsigned long currentTime = millis();  // Update currentTime each call
+// Lifter control
+if (incomingData.stat[9] == 0 && (currentTime - lastDebounceTimeA) > debounceDelay) { // Tombol A (Lifter down)
+    lastDebounceTimeA = currentTime;
+    if (lifterState != LIFTER_DOWN) {
+    actuationStartTime = currentTime;
+    lifterState = LIFTER_MOVING;
+    int currentPos = servo2.read();
+    moveServoSmooth(servo2, currentPos, 0);
+    lifterState = LIFTER_DOWN;
+    }
+}
+if (incomingData.stat[11] == 0 && (currentTime - lastDebounceTimeB) > debounceDelay) { // Tombol B (Lifter up)
+    lastDebounceTimeB = currentTime;
+    if (lifterState != LIFTER_UP) {
+    actuationStartTime = currentTime;
+    lifterState = LIFTER_MOVING;
+    int currentPos = servo2.read();
+    moveServoSmooth(servo2, currentPos, 150);
+    lifterState = LIFTER_UP;
+    }
+}
+// Gripper control
+if (incomingData.stat[13] == 0 && (currentTime - lastDebounceTimeX) > debounceDelay) { // Tombol X (Gripper open)
+    lastDebounceTimeX = currentTime;
+    if (gripperState != GRIPPER_OPEN) {
         actuationStartTime = currentTime;
-        lifterState = LIFTER_MOVING;
-        int currentPos = servo2.read();
-        moveServoSmooth(servo2, currentPos, 0);
-        lifterState = LIFTER_DOWN;
-        }
+        gripperState = GRIPPER_MOVING;
+        int currentPos = servo1.read();
+        moveServoSmooth(servo1, currentPos, 0);  // Membuka gripper
+        gripperState = GRIPPER_OPEN;
     }
-
-    if (incomingData.stat[11] == 0 && (currentTime - lastDebounceTimeB) > debounceDelay) { // Tombol B (Lifter up)
-        lastDebounceTimeB = currentTime;
-        if (lifterState != LIFTER_UP) {
+}
+if (incomingData.stat[3] == 0 && (currentTime - lastDebounceTimeY) > debounceDelay) { // Tombol Y (Gripper close)
+    lastDebounceTimeY = currentTime;
+    if (gripperState != GRIPPER_CLOSE) {
         actuationStartTime = currentTime;
-        lifterState = LIFTER_MOVING;
-        int currentPos = servo2.read();
-        moveServoSmooth(servo2, currentPos, 150);
-        lifterState = LIFTER_UP;
-        }
+        gripperState = GRIPPER_MOVING;
+        int currentPos = servo1.read();
+        moveServoSmooth(servo1, currentPos, 180); // Menutup gripper
+        gripperState = GRIPPER_CLOSE;
     }
-
-    // Gripper control
-    if (incomingData.stat[13] == 0 && (currentTime - lastDebounceTimeX) > debounceDelay) { // Tombol X (Gripper open)
-        lastDebounceTimeX = currentTime;
-        if (gripperState != GRIPPER_OPEN) {
-            actuationStartTime = currentTime;
-            gripperState = GRIPPER_MOVING;
-            int currentPos = servo1.read();
-            moveServoSmooth(servo1, currentPos, 0);  // Membuka gripper
-            gripperState = GRIPPER_OPEN;
-        }
-    }
-
-    if (incomingData.stat[3] == 0 && (currentTime - lastDebounceTimeY) > debounceDelay) { // Tombol Y (Gripper close)
-        lastDebounceTimeY = currentTime;
-        if (gripperState != GRIPPER_CLOSE) {
-            actuationStartTime = currentTime;
-            gripperState = GRIPPER_MOVING;
-            int currentPos = servo1.read();
-            moveServoSmooth(servo1, currentPos, 180); // Menutup gripper
-            gripperState = GRIPPER_CLOSE;
-        }
-    }
-
-    // Timed actuation check (stop if max time exceeded, though soft-move handles timing)
-    if (lifterState == LIFTER_MOVING && (currentTime - actuationStartTime) > maxActuationTime) {
-        servo2.write(servo2.read());
-        lifterState = (servo2.read() < 75) ? LIFTER_DOWN : LIFTER_UP;
-    }
-    if (gripperState == GRIPPER_MOVING && (currentTime - actuationStartTime) > maxActuationTime) {
-        servo1.write(servo1.read());
-        gripperState = (servo1.read() < 90) ? GRIPPER_OPEN : GRIPPER_CLOSE;
-    }
+}
+// Timed actuation check (stop if max time exceeded, though soft-move handles timing)
+if (lifterState == LIFTER_MOVING && (currentTime - actuationStartTime) > maxActuationTime) {
+    servo2.write(servo2.read());
+    lifterState = (servo2.read() < 75) ? LIFTER_DOWN : LIFTER_UP;
+}
+if (gripperState == GRIPPER_MOVING && (currentTime - actuationStartTime) > maxActuationTime) {
+    servo1.write(servo1.read());
+    gripperState = (servo1.read() < 90) ? GRIPPER_OPEN : GRIPPER_CLOSE;
+}
 }
 
 void OnDataRecv(const uint8_t *mac, const uint8_t *incomingLocal, int len) {
@@ -189,6 +194,7 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingLocal, int len) {
 
     DriveRobot();
     GripperControl();
+    ShortCutSpeedControl();
     // failSafeCheck(incomingData);
 }
 

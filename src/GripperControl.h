@@ -41,7 +41,7 @@ void setupGripperControl() {
     servo2.attach(servoPin2, 1000, 2000);
 
     servo1.write(0);  // Gripper open
-    servo2.write(0);  // Lifter down
+    servo2.write(150);  // Lifter up
 }
 
 void moveServoSmooth(Servo &servo, int startPos, int endPos) {
