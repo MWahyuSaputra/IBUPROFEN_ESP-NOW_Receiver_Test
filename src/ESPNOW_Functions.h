@@ -18,6 +18,10 @@ typedef struct struct_message {
 
 struct_message incomingData;
 
+bool isAutoSequenceRunning = false;
+bool squarePressed = false;
+bool roundPressed = false;
+
 struct PID {
     float Kp, Ki, Kd;
     float prevError;
@@ -29,7 +33,7 @@ struct PID {
 // Low-pass filter struct using Exponential Moving Average (EMA)
 struct AxisFilter {
     float prevFiltered = 0;
-    float alpha = 0.45;  // Smoothing factor (0-1), adjustable for responsiveness
+    float alpha = 0.75;  // Smoothing factor (0-1), adjustable for responsiveness
     // Note: alpha for RX will be overridden to 0.8 for smoother rotation
 };
 
@@ -127,11 +131,50 @@ void ShortCutSpeedControl() {
         brakeAll(motor1, motor2, motor3, motor4);
     }
 }
+void TakeObject() {
+    DEBUG_PRINTLN("Taking object...");
+    lifterState = LIFTER_MOVING;
+    actuationStartTime = millis();
+    // Move lifter down
+    int currentLifterPos = servo2.read();
+    moveServoSmooth(servo2, currentLifterPos, 0);
+    lifterState = LIFTER_DOWN;
+    // Close gripper
+    gripperState = GRIPPER_MOVING;
+    int currentGripperPos = servo1.read();
+    moveServoSmooth(servo1, currentGripperPos, 180);
+    gripperState = GRIPPER_CLOSE;
+    // Move lifter up
+    lifterState = LIFTER_MOVING;
+    moveServoSmooth(servo2, 0, 150);
+    lifterState = LIFTER_UP;
+    DEBUG_PRINTLN("Object taken.");
+}
+
+void PlaceObject() {
+    DEBUG_PRINTLN("Placing object...");
+    lifterState = LIFTER_MOVING;
+    actuationStartTime = millis();
+    // Move lifter down
+    int currentLifterPos = servo2.read();
+    moveServoSmooth(servo2, currentLifterPos, 0);
+    lifterState = LIFTER_DOWN;
+    // Open gripper
+    gripperState = GRIPPER_MOVING;
+    int currentGripperPos = servo1.read();
+    moveServoSmooth(servo1, currentGripperPos, 0);
+    gripperState = GRIPPER_OPEN;
+    // Move lifter up
+    lifterState = LIFTER_MOVING;
+    moveServoSmooth(servo2, 0, 150);
+    lifterState = LIFTER_UP;
+    DEBUG_PRINTLN("Object placed.");
+}
 
 void GripperControl() {
-unsigned long currentTime = millis();  // Update currentTime each call
+    unsigned long currentTime = millis();  // Update currentTime each call
 // Lifter control
-if (incomingData.stat[9] == 0 && (currentTime - lastDebounceTimeA) > debounceDelay) { // Tombol A (Lifter down)
+if (incomingData.stat[9] == 0 && (currentTime - lastDebounceTimeA) > debounceDelay && !isAutoSequenceRunning) { // Tombol A (Lifter down)
     lastDebounceTimeA = currentTime;
     if (lifterState != LIFTER_DOWN) {
     actuationStartTime = currentTime;
@@ -141,7 +184,7 @@ if (incomingData.stat[9] == 0 && (currentTime - lastDebounceTimeA) > debounceDel
     lifterState = LIFTER_DOWN;
     }
 }
-if (incomingData.stat[11] == 0 && (currentTime - lastDebounceTimeB) > debounceDelay) { // Tombol B (Lifter up)
+if (incomingData.stat[11] == 0 && (currentTime - lastDebounceTimeB) > debounceDelay && !isAutoSequenceRunning) { // Tombol B (Lifter up)
     lastDebounceTimeB = currentTime;
     if (lifterState != LIFTER_UP) {
     actuationStartTime = currentTime;
@@ -152,7 +195,7 @@ if (incomingData.stat[11] == 0 && (currentTime - lastDebounceTimeB) > debounceDe
     }
 }
 // Gripper control
-if (incomingData.stat[13] == 0 && (currentTime - lastDebounceTimeX) > debounceDelay) { // Tombol X (Gripper open)
+if (incomingData.stat[13] == 0 && (currentTime - lastDebounceTimeX) > debounceDelay && !isAutoSequenceRunning) { // Tombol X (Gripper open)
     lastDebounceTimeX = currentTime;
     if (gripperState != GRIPPER_OPEN) {
         actuationStartTime = currentTime;
@@ -162,7 +205,7 @@ if (incomingData.stat[13] == 0 && (currentTime - lastDebounceTimeX) > debounceDe
         gripperState = GRIPPER_OPEN;
     }
 }
-if (incomingData.stat[3] == 0 && (currentTime - lastDebounceTimeY) > debounceDelay) { // Tombol Y (Gripper close)
+if (incomingData.stat[3] == 0 && (currentTime - lastDebounceTimeY) > debounceDelay && !isAutoSequenceRunning) { // Tombol Y (Gripper close)
     lastDebounceTimeY = currentTime;
     if (gripperState != GRIPPER_CLOSE) {
         actuationStartTime = currentTime;
@@ -172,15 +215,35 @@ if (incomingData.stat[3] == 0 && (currentTime - lastDebounceTimeY) > debounceDel
         gripperState = GRIPPER_CLOSE;
     }
 }
-// Timed actuation check (stop if max time exceeded, though soft-move handles timing)
-if (lifterState == LIFTER_MOVING && (currentTime - actuationStartTime) > maxActuationTime) {
-    servo2.write(servo2.read());
-    lifterState = (servo2.read() < 75) ? LIFTER_DOWN : LIFTER_UP;
-}
-if (gripperState == GRIPPER_MOVING && (currentTime - actuationStartTime) > maxActuationTime) {
-    servo1.write(servo1.read());
-    gripperState = (servo1.read() < 90) ? GRIPPER_OPEN : GRIPPER_CLOSE;
-}
+    // Automatic Take Object (Square button)
+    if (incomingData.stat[8] == 0 && !squarePressed && !isAutoSequenceRunning) {
+        squarePressed = true;
+        isAutoSequenceRunning = true;
+        TakeObject();
+        isAutoSequenceRunning = false;
+    }
+    if (incomingData.stat[8] == 1 && squarePressed) {
+        squarePressed = false;
+    }
+    // Automatic Place Object (Round button)
+    if (incomingData.stat[10] == 0 && !roundPressed && !isAutoSequenceRunning) {
+        roundPressed = true;
+        isAutoSequenceRunning = true;
+        PlaceObject();
+        isAutoSequenceRunning = false;
+    }
+    if (incomingData.stat[10] == 1 && roundPressed) {
+        roundPressed = false;
+    }
+    // Timed actuation check (stop if max time exceeded, though soft-move handles timing)
+    if (lifterState == LIFTER_MOVING && (currentTime - actuationStartTime) > maxActuationTime) {
+        servo2.write(servo2.read());
+        lifterState = (servo2.read() < 75) ? LIFTER_DOWN : LIFTER_UP;
+    }
+    if (gripperState == GRIPPER_MOVING && (currentTime - actuationStartTime) > maxActuationTime) {
+        servo1.write(servo1.read());
+        gripperState = (servo1.read() < 90) ? GRIPPER_OPEN : GRIPPER_CLOSE;
+    }
 }
 
 void OnDataRecv(const uint8_t *mac, const uint8_t *incomingLocal, int len) {
@@ -191,7 +254,7 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingLocal, int len) {
     
     dataLine += String(incomingData.remoteIndex);
     DEBUG_PRINTLN("Serial Sent Data: " + dataLine);
-
+    
     DriveRobot();
     GripperControl();
     ShortCutSpeedControl();

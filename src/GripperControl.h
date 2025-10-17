@@ -18,6 +18,8 @@ unsigned long lastDebounceTimeA = 0;
 unsigned long lastDebounceTimeB = 0;
 unsigned long lastDebounceTimeX = 0;
 unsigned long lastDebounceTimeY = 0;  // Assuming stat[3] is Y button
+unsigned long lastDebounceTimeSquare = 0;  // For Take Object (Square)
+unsigned long lastDebounceTimeRound = 0;   // For Place Object (Round)
 const unsigned long debounceDelay = 200;  // 200ms debounce
 
 // Timed actuation variables
