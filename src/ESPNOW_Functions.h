@@ -21,7 +21,6 @@ struct_message incomingData;
 bool isAutoSequenceRunning = false;
 bool squarePressed = false;
 bool roundPressed = false;
-
 struct PID {
     float Kp, Ki, Kd;
     float prevError;
@@ -38,9 +37,9 @@ struct AxisFilter {
 };
 
 // PID parameters (adjustable for tuning)
-const float KP_X = 0.4, KI_X = 0.01, KD_X = 0.1;  // For X-axis (left-right)
-const float KP_Y = 0.4, KI_Y = 0.01, KD_Y = 0.1;  // For Y-axis (forward-backward)
-const float KP_RX = 0.1, KI_RX = 0.01, KD_RX = 0.1;  // For RX-axis (rotation) - reduced for smoother response
+const float KP_X = 0.25, KI_X = 0.01, KD_X = 0.15;  // For X-axis (left-right)
+const float KP_Y = 0.25, KI_Y = 0.01, KD_Y = 0.15;  // For Y-axis (forward-backward)
+const float KP_RX = 0.25, KI_RX = 0.01, KD_RX = 0.15;  // For RX-axis (rotation) - reduced for smoother response
 const int DEADZONE = 5;  // Dead zone threshold to prevent vibrations at neutral
 
 // Function to apply low-pass filter (EMA) to axis input
@@ -54,8 +53,8 @@ int applyPIDControl(float setpoint, PID &pid) {
     float error = setpoint - pid.prevOutput;
     pid.integral += error;
     // Limit integral to prevent windup
-    if (pid.integral > 150) pid.integral = 150;
-    if (pid.integral < -150) pid.integral = -150;
+    if (pid.integral > 100) pid.integral = 100;
+    if (pid.integral < -100) pid.integral = -100;
     float derivative = error - pid.prevError;
     float output = pid.Kp * error + pid.Ki * pid.integral + pid.Kd * derivative;
     pid.prevError = error;
@@ -74,7 +73,7 @@ void DriveRobot(){
         static PID pidY = {KP_Y, KI_Y, KD_Y};
         static PID pidRX = {KP_RX, KI_RX, KD_RX};
 
-             // Extract raw joystick data
+        // Extract raw joystick data
         int x = incomingData.joyData[0];  // X-axis (Left-Right movement)
         int y = incomingData.joyData[1];  // Y-axis (Forward-Backward movement)
         int rx = incomingData.joyData[2]; // X-axis (Rotation)
@@ -101,38 +100,45 @@ void DriveRobot(){
         // Kalkulasi kecepatan motor berdasarkan input joystick yang telah dihaluskan
         // Scale rotation contribution to limit speed
         int scaledRX = smoothedRX * 0.15; // Scale down rotation effect to 60%
-        int frontLeft  = smoothedY + smoothedX - scaledRX;
-        int backLeft   = smoothedY - smoothedX - scaledRX;
-        int frontRight = smoothedY - smoothedX + scaledRX;
-        int backRight  = smoothedY + smoothedX + scaledRX;
+        // int frontLeft  = smoothedY + smoothedX + scaledRX;
+        // int backLeft   = smoothedY - smoothedX + scaledRX;
+        // int frontRight = smoothedY - smoothedX - scaledRX;
+        // int backRight  = smoothedY + smoothedX - scaledRX;
+        int frontLeft  = smoothedY - smoothedX + scaledRX;
+        int backLeft   = smoothedY + smoothedX + scaledRX;
+        int frontRight = smoothedY + smoothedX - scaledRX;
+        int backRight  = smoothedY - smoothedX - scaledRX;
 
 
         // Normalize motor speeds
         int maxVal = max(max(abs(frontLeft), abs(backLeft)), max(abs(frontRight), abs(backRight)));
-        if (maxVal > 150) {
-            frontLeft  = (frontLeft  * 150) / maxVal;
-            backLeft   = (backLeft   * 150) / maxVal;
-            frontRight = (frontRight * 150) / maxVal;
-            backRight  = (backRight  * 150) / maxVal;
+        if (maxVal > 100) {
+            frontLeft  = (frontLeft  * 100) / maxVal;
+            backLeft   = (backLeft   * 100) / maxVal;
+            frontRight = (frontRight * 100) / maxVal;
+            backRight  = (backRight  * 100) / maxVal;
         }
 
         // Drive motors with calculated speeds
-        motor1.drive(-frontLeft);
-        motor2.drive(frontRight);
-        motor3.drive(backLeft);
-        motor4.drive(-backRight);
+        motor1.drive(-frontLeft * 1);
+        motor2.drive(frontRight * 0.935);
+        motor3.drive(backLeft   * 1);
+        motor4.drive(-backRight * 0.935);
     }
 }
 
-void ShortCutSpeedControl() {
-    if(incomingData.stat[2] == 0){
-        moveForward(motor1, motor2, motor3, motor4, 200);
-        delay(700);
-        brakeAll(motor1, motor2, motor3, motor4);
-    }
-}
 void TakeObject() {
-    DEBUG_PRINTLN("Taking object...");
+    // Move forward briefly to approach the object
+    moveForward(motor1, motor2, motor3, motor4, 30);
+    delay(175);
+    brakeAll(motor1, motor2, motor3, motor4);
+    delay(100);
+
+    // Move backward a little to align object's position with gripper
+    moveBackward(motor1, motor2, motor3, motor4, 30);
+    delay(245);
+    brakeAll(motor1, motor2, motor3, motor4);
+
     lifterState = LIFTER_MOVING;
     actuationStartTime = millis();
     // Move lifter down
@@ -148,16 +154,19 @@ void TakeObject() {
     lifterState = LIFTER_MOVING;
     moveServoSmooth(servo2, 0, 150);
     lifterState = LIFTER_UP;
-    DEBUG_PRINTLN("Object taken.");
 }
 
 void PlaceObject() {
-    DEBUG_PRINTLN("Placing object...");
+    // Move backward a little before lowering lifter
+    moveBackward(motor1, motor2, motor3, motor4, 30);
+    delay(275);
+    brakeAll(motor1, motor2, motor3, motor4);
+
     lifterState = LIFTER_MOVING;
     actuationStartTime = millis();
     // Move lifter down
     int currentLifterPos = servo2.read();
-    moveServoSmooth(servo2, currentLifterPos, 0);
+    moveServoSmooth(servo2, currentLifterPos, 45);
     lifterState = LIFTER_DOWN;
     // Open gripper
     gripperState = GRIPPER_MOVING;
@@ -168,7 +177,6 @@ void PlaceObject() {
     lifterState = LIFTER_MOVING;
     moveServoSmooth(servo2, 0, 150);
     lifterState = LIFTER_UP;
-    DEBUG_PRINTLN("Object placed.");
 }
 
 void GripperControl() {
@@ -257,7 +265,7 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingLocal, int len) {
     
     DriveRobot();
     GripperControl();
-    ShortCutSpeedControl();
+    // ShortCutSpeedControl();
     // failSafeCheck(incomingData);
 }
 
