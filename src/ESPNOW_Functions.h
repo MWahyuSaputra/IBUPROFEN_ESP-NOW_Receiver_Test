@@ -32,7 +32,7 @@ struct PID {
 // Low-pass filter struct using Exponential Moving Average (EMA)
 struct AxisFilter {
     float prevFiltered = 0;
-    float alpha = 0.75;  // Smoothing factor (0-1), adjustable for responsiveness
+    float alpha = 0.55;  // Smoothing factor (0-1), adjustable for responsiveness
     // Note: alpha for RX will be overridden to 0.8 for smoother rotation
 };
 
@@ -63,10 +63,17 @@ int applyPIDControl(float setpoint, PID &pid) {
 }
 
 void DriveRobot(){
-    if (incomingData.joyData[0] == 0 && incomingData.joyData[1] == 0 && incomingData.joyData[2] == 0 && incomingData.joyData[3] == 0){
-        brakeAll(motor1, motor2, motor3, motor4);
+    // Check if joystick is active (any axis not zero)
+    bool joystickActive = false;
+    for(int i = 0; i < 4; i++){
+        if(incomingData.joyData[i] != 0){
+            joystickActive = true;
+            break;
+        }
     }
-    else {
+
+    if(joystickActive){
+        // Joystick mode: use PID and low-pass filter for smooth movement
         // persistent filter and PID instances for each axis
         static AxisFilter filterX, filterY, filterRX;
         static PID pidX = {KP_X, KI_X, KD_X};
@@ -92,14 +99,14 @@ void DriveRobot(){
         if (abs(filteredY) < DEADZONE) filteredY = 0;
         if (abs(filteredRX) < DEADZONE) filteredRX = 0;
 
-        // Aplly PID untuk menghaluskan respons
+        // Apply PID untuk menghaluskan respons
         int smoothedX = applyPIDControl(filteredX, pidX);
         int smoothedY = applyPIDControl(filteredY, pidY);
         int smoothedRX = applyPIDControl(filteredRX, pidRX);
 
         // Kalkulasi kecepatan motor berdasarkan input joystick yang telah dihaluskan
         // Scale rotation contribution to limit speed
-        int scaledRX = smoothedRX * 0.15; // Scale down rotation effect to 60%
+        int scaledRX = smoothedRX * 0.075; // Scale down rotation effect to 60%
         // int frontLeft  = smoothedY + smoothedX + scaledRX;
         // int backLeft   = smoothedY - smoothedX + scaledRX;
         // int frontRight = smoothedY - smoothedX - scaledRX;
@@ -108,7 +115,6 @@ void DriveRobot(){
         int backLeft   = smoothedY + smoothedX + scaledRX;
         int frontRight = smoothedY + smoothedX - scaledRX;
         int backRight  = smoothedY - smoothedX - scaledRX;
-
 
         // Normalize motor speeds
         int maxVal = max(max(abs(frontLeft), abs(backLeft)), max(abs(frontRight), abs(backRight)));
@@ -120,10 +126,49 @@ void DriveRobot(){
         }
 
         // Drive motors with calculated speeds
-        motor1.drive(-frontLeft * 1);
-        motor2.drive(frontRight * 0.935);
-        motor3.drive(backLeft   * 1);
-        motor4.drive(-backRight * 0.935);
+        motor1.drive(-frontLeft * 0.975);
+        motor2.drive(frontRight * 0.85);
+        motor3.drive(backLeft   * 0.975);
+        motor4.drive(-backRight * 0.85);
+    } else {
+        // Button mode: constant speed movement using same calculation as joystick for consistency
+        const int buttonSpeed = 75;  // Constant speed for button controls
+        int x = 0, y = 0, rx = 0;
+        if(incomingData.stat[4] == 0){  // UP button pressed
+            y = -buttonSpeed;
+        } else if(incomingData.stat[6] == 0){  // DOWN button pressed
+            y = buttonSpeed;
+        } else if(incomingData.stat[5] == 0){  // LEFT button pressed
+            x = -buttonSpeed;
+        } else if(incomingData.stat[7] == 0){  // RIGHT button pressed
+            x = buttonSpeed;
+        } else {
+            // No buttons pressed, brake all motors
+            brakeAll(motor1, motor2, motor3, motor4);
+            return;
+        }
+
+        // Use same motor speed calculation as joystick mode
+        int scaledRX = rx * 0.075; // Scale down rotation effect
+        int frontLeft  = y - x + scaledRX;
+        int backLeft   = y + x + scaledRX;
+        int frontRight = y + x - scaledRX;
+        int backRight  = y - x - scaledRX;
+
+        // Normalize motor speeds
+        int maxVal = max(max(abs(frontLeft), abs(backLeft)), max(abs(frontRight), abs(backRight)));
+        if (maxVal > 100) {
+            frontLeft  = (frontLeft  * 100) / maxVal;
+            backLeft   = (backLeft   * 100) / maxVal;
+            frontRight = (frontRight * 100) / maxVal;
+            backRight  = (backRight  * 100) / maxVal;
+        }
+
+        // Drive motors with calculated speeds
+        motor1.drive(-frontLeft * 0.975);
+        motor2.drive(frontRight * 0.85);
+        motor3.drive(backLeft   * 0.975);
+        motor4.drive(-backRight * 0.85);
     }
 }
 
@@ -154,6 +199,7 @@ void TakeObject() {
     lifterState = LIFTER_MOVING;
     moveServoSmooth(servo2, 0, 150);
     lifterState = LIFTER_UP;
+    lifterPosition = 150;  // Update position after auto sequence
 }
 
 void PlaceObject() {
@@ -181,29 +227,46 @@ void PlaceObject() {
 
 void GripperControl() {
     unsigned long currentTime = millis();  // Update currentTime each call
-// Lifter control
-if (incomingData.stat[9] == 0 && (currentTime - lastDebounceTimeA) > debounceDelay && !isAutoSequenceRunning) { // Tombol A (Lifter down)
+// Lifter control - incremental
+if (incomingData.stat[9] == 0 && (currentTime - lastDebounceTimeA) > debounceDelay && !isAutoSequenceRunning) { // Tombol X (Lifter down)
     lastDebounceTimeA = currentTime;
-    if (lifterState != LIFTER_DOWN) {
+    lifterPosition = constrain(lifterPosition - 25, 0, 150);
+    actuationStartTime = currentTime;
+    lifterState = LIFTER_MOVING;
+    int currentPos = servo2.read();
+    moveServoSmooth(servo2, currentPos, lifterPosition);
+    lifterState = (lifterPosition == 0) ? LIFTER_DOWN : (lifterPosition == 150) ? LIFTER_UP : LIFTER_MOVING;
+}
+if (incomingData.stat[11] == 0 && (currentTime - lastDebounceTimeB) > debounceDelay && !isAutoSequenceRunning) { // Tombol Triangle (Lifter up)
+    lastDebounceTimeB = currentTime;
+    lifterPosition = constrain(lifterPosition + 25, 0, 150);
+    actuationStartTime = currentTime;
+    lifterState = LIFTER_MOVING;
+    int currentPos = servo2.read();
+    moveServoSmooth(servo2, currentPos, lifterPosition);
+    lifterState = (lifterPosition == 0) ? LIFTER_DOWN : (lifterPosition == 150) ? LIFTER_UP : LIFTER_MOVING;
+}
+// Lifter control - full movement
+if (incomingData.stat[2] == 0 && (currentTime - lastDebounceTimeL2) > debounceDelay && !isAutoSequenceRunning) { // Tombol L2 (Lifter down full)
+    lastDebounceTimeL2 = currentTime;
     actuationStartTime = currentTime;
     lifterState = LIFTER_MOVING;
     int currentPos = servo2.read();
     moveServoSmooth(servo2, currentPos, 0);
     lifterState = LIFTER_DOWN;
-    }
+    lifterPosition = 0;
 }
-if (incomingData.stat[11] == 0 && (currentTime - lastDebounceTimeB) > debounceDelay && !isAutoSequenceRunning) { // Tombol B (Lifter up)
-    lastDebounceTimeB = currentTime;
-    if (lifterState != LIFTER_UP) {
+if (incomingData.stat[12] == 0 && (currentTime - lastDebounceTimeR2) > debounceDelay && !isAutoSequenceRunning) { // Tombol R2 (Lifter up full)
+    lastDebounceTimeR2 = currentTime;
     actuationStartTime = currentTime;
     lifterState = LIFTER_MOVING;
     int currentPos = servo2.read();
     moveServoSmooth(servo2, currentPos, 150);
     lifterState = LIFTER_UP;
-    }
+    lifterPosition = 150;
 }
 // Gripper control
-if (incomingData.stat[13] == 0 && (currentTime - lastDebounceTimeX) > debounceDelay && !isAutoSequenceRunning) { // Tombol X (Gripper open)
+if (incomingData.stat[13] == 0 && (currentTime - lastDebounceTimeX) > debounceDelay && !isAutoSequenceRunning) { // Tombol L1 (Gripper open)
     lastDebounceTimeX = currentTime;
     if (gripperState != GRIPPER_OPEN) {
         actuationStartTime = currentTime;
@@ -213,7 +276,7 @@ if (incomingData.stat[13] == 0 && (currentTime - lastDebounceTimeX) > debounceDe
         gripperState = GRIPPER_OPEN;
     }
 }
-if (incomingData.stat[3] == 0 && (currentTime - lastDebounceTimeY) > debounceDelay && !isAutoSequenceRunning) { // Tombol Y (Gripper close)
+if (incomingData.stat[3] == 0 && (currentTime - lastDebounceTimeY) > debounceDelay && !isAutoSequenceRunning) { // Tombol R1 (Gripper close)
     lastDebounceTimeY = currentTime;
     if (gripperState != GRIPPER_CLOSE) {
         actuationStartTime = currentTime;
@@ -265,6 +328,7 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingLocal, int len) {
     
     DriveRobot();
     GripperControl();
+    // DriveMotorButtonlogic();
     // ShortCutSpeedControl();
     // failSafeCheck(incomingData);
 }

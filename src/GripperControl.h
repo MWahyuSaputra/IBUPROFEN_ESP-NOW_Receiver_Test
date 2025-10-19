@@ -13,11 +13,15 @@ enum GripperState { GRIPPER_OPEN, GRIPPER_CLOSE, GRIPPER_MOVING };
 LifterState lifterState = LIFTER_DOWN;  // Assume starting at down
 GripperState gripperState = GRIPPER_OPEN; // Assume starting at open
 
+int lifterPosition = 150;  // Global variable to track lifter position, starting at up (150°)
+
 // Debounce and timing variables
 unsigned long lastDebounceTimeA = 0;
 unsigned long lastDebounceTimeB = 0;
 unsigned long lastDebounceTimeX = 0;
 unsigned long lastDebounceTimeY = 0;  // Assuming stat[3] is Y button
+unsigned long lastDebounceTimeL2 = 0;  // For L2 button (Lifter down full)
+unsigned long lastDebounceTimeR2 = 0;  // For R2 button (Lifter up full)
 unsigned long lastDebounceTimeSquare = 0;  // For Take Object (Square)
 unsigned long lastDebounceTimeRound = 0;   // For Place Object (Round)
 const unsigned long debounceDelay = 200;  // 200ms debounce

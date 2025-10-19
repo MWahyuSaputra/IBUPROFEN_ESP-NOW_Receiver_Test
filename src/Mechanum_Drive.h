@@ -86,18 +86,18 @@ inline void rotateCounterClockwise(Motor& motor1, Motor& motor2, Motor& motor3, 
 inline void moveLeft(Motor& motor1, Motor& motor2, Motor& motor3, Motor& motor4, int speed)
 {
     motor1.drive(-speed);
-    motor2.drive(-speed);
+    motor2.drive(speed);
     motor3.drive(speed);
-    motor4.drive(speed);
+    motor4.drive(-speed);
 }
 
 // Move robot to the right (sideways movement)
 inline void moveRight(Motor& motor1, Motor& motor2, Motor& motor3, Motor& motor4, int speed)
 {
     motor1.drive(speed);
-    motor2.drive(speed);
+    motor2.drive(-speed);
     motor3.drive(-speed);
-    motor4.drive(-speed);
+    motor4.drive(speed);
 }
 
 // Move robot forward (straight movement)
